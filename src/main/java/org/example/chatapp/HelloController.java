@@ -36,6 +36,19 @@ public class HelloController {
 
         System.out.println("Connexion réussie pour : " + username);
 
+        try {
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/org/example/chatapp/chat_view.fxml"));
+            AnchorPane root = loader.load();
+
+            Stage stage = (Stage) username_input.getScene().getWindow();
+            stage.setScene(new Scene(root));
+            stage.setTitle("Chat");
+            stage.show();
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
     }
 
 

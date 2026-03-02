@@ -10,90 +10,51 @@
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
-<AnchorPane prefHeight="400.0" prefWidth="600.0"
-            style="-fx-background-color: #6a0dad;"
-            xmlns="http://javafx.com/javafx/24.0.1"
-            xmlns:fx="http://javafx.com/fxml/1"
-            fx:controller="org.example.chatapp.HelloController">
+<AnchorPane prefHeight="400.0" prefWidth="600.0" style="-fx-background-color: #6a0dad;" xmlns="http://javafx.com/javafx/24.0.1" xmlns:fx="http://javafx.com/fxml/1" fx:controller="org.example.chatapp.HelloController">
 
     <children>
 
 
-        <VBox fx:id="loginBox"
-              alignment="CENTER"
-              spacing="18"
-              prefWidth="320"
-              AnchorPane.leftAnchor="140.0"
-              AnchorPane.rightAnchor="140.0"
-              AnchorPane.topAnchor="50.0"
-              style="-fx-background-color: white;
-                     -fx-background-radius: 25;
-                     -fx-padding: 25;">
+        <VBox fx:id="loginBox" alignment="CENTER" prefWidth="320" spacing="18" style="-fx-background-color: white;                      -fx-background-radius: 25;                      -fx-padding: 25;" AnchorPane.leftAnchor="140.0" AnchorPane.rightAnchor="140.0" AnchorPane.topAnchor="50.0">
 
 
             <HBox alignment="CENTER" spacing="10">
                 <ImageView fitHeight="50" fitWidth="50" preserveRatio="true">
                     <image>
-                        <Image url="@chat.png"/>
+                        <Image url="@chat.png" />
                     </image>
                 </ImageView>
 
-                <Label text="FBChat"
-                       style="-fx-font-size: 22px;
-                              -fx-font-weight: bold;"/>
+                <Label style="-fx-font-size: 22px;                               -fx-font-weight: bold;" text="FBChat" />
             </HBox>
 
 
-            <HBox alignment="CENTER_LEFT"
-                  spacing="8"
-                  style="-fx-background-color: #f2f2f2;
-                         -fx-background-radius: 15;
-                         -fx-padding: 8;">
+            <HBox alignment="CENTER_LEFT" spacing="8" style="-fx-background-color: #f2f2f2;                          -fx-background-radius: 15;                          -fx-padding: 8;">
 
                 <ImageView fitHeight="20" fitWidth="20">
                     <image>
-                        <Image url="@user.png"/>
+                        <Image url="@user.png" />
                     </image>
                 </ImageView>
 
-                <TextField fx:id="username_input"
-                           promptText="Nom d'utilisateur"
-                           style="-fx-background-color: transparent;"
-                           HBox.hgrow="ALWAYS"/>
+                <TextField fx:id="username_input" promptText="Nom d'utilisateur" style="-fx-background-color: transparent;" HBox.hgrow="ALWAYS" />
             </HBox>
 
 
-            <HBox alignment="CENTER_LEFT"
-                  spacing="8"
-                  style="-fx-background-color: #f2f2f2;
-                         -fx-background-radius: 15;
-                         -fx-padding: 8;">
+            <HBox alignment="CENTER_LEFT" spacing="8" style="-fx-background-color: #f2f2f2;                          -fx-background-radius: 15;                          -fx-padding: 8;">
 
                 <ImageView fitHeight="20" fitWidth="20">
                     <image>
-                        <Image url="@lock.png"/>
+                        <Image url="@lock.png" />
                     </image>
                 </ImageView>
 
-                <PasswordField fx:id="password_input"
-                               promptText="Mot de passe"
-                               style="-fx-background-color: transparent;"
-                               HBox.hgrow="ALWAYS"/>
+                <PasswordField fx:id="password_input" promptText="Mot de passe" style="-fx-background-color: transparent;" HBox.hgrow="ALWAYS" />
             </HBox>
 
-            <Button text="Se connecter"
-                    onAction="#login"
-                    maxWidth="Infinity"
-                    style="-fx-background-color: #6a0dad;
-                           -fx-text-fill: white;
-                           -fx-background-radius: 18;
-                           -fx-font-weight: bold;"/>
+            <Button maxWidth="Infinity" onAction="#login" style="-fx-background-color: #6a0dad;                            -fx-text-fill: white;                            -fx-background-radius: 18;                            -fx-font-weight: bold;" text="Se connecter" />
 
-            <Label text="Créer un compte"
-                   onMouseClicked="#goToRegister"
-                   style="-fx-text-fill: #6a0dad;
-                          -fx-underline: true;
-                          -fx-cursor: hand;"/>
+            <Label onMouseClicked="#goToRegister" style="-fx-text-fill: #6a0dad;                           -fx-underline: true;                           -fx-cursor: hand;" text="Créer un compte" />
 
         </VBox>
 
