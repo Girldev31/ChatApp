@@ -26,9 +26,10 @@ public class HelloApplication extends Application {
             e.printStackTrace();
         }
         FXMLLoader fxmlLoader = new FXMLLoader(HelloApplication.class.getResource("hello-view.fxml"));
-        Scene scene = new Scene(fxmlLoader.load(), 320, 240);
+        Scene scene = new Scene(fxmlLoader.load(), 620, 440);
         stage.setTitle("Hello!");
         stage.setScene(scene);
+        stage.setResizable(false);
         stage.show();
     }
 }

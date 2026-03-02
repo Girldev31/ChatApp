@@ -11,4 +11,5 @@ module org.example.chatapp {
     opens org.example.chatapp.entity;
     opens org.example.chatapp to javafx.fxml;
     exports org.example.chatapp;
+    opens org.example.chatapp.utils to javafx.fxml;
 }
