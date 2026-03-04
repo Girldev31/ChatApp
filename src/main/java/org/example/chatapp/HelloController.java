@@ -25,6 +25,7 @@ public class HelloController {
 
     @FXML
     void login(ActionEvent event) {
+
         String username = username_input.getText();
         String password = password_input.getText();
 
@@ -33,22 +34,22 @@ public class HelloController {
             return;
         }
 
-
-        System.out.println("Connexion réussie pour : " + username);
-
         try {
             FXMLLoader loader = new FXMLLoader(getClass().getResource("/org/example/chatapp/chat_view.fxml"));
             AnchorPane root = loader.load();
 
+            // ✅ Récupérer le controller et passer le username
+            ChatController chatController = loader.getController();
+            chatController.setUsername(username);  // ← C'est ça qui manquait !
+
             Stage stage = (Stage) username_input.getScene().getWindow();
             stage.setScene(new Scene(root));
-            stage.setTitle("Chat");
+            stage.setTitle("Chat - " + username);
             stage.show();
 
         } catch (IOException e) {
             e.printStackTrace();
         }
-
     }
 
 
