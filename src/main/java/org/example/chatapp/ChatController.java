@@ -2,91 +2,162 @@ package org.example.chatapp;
 
 import javafx.application.Platform;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.control.Label;
-import javafx.scene.control.TextField;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
-import javafx.scene.text.Font;
-import org.example.chatapp.entity.Message;
-import org.example.chatapp.utils.JPAUtil;
-import java.util.List;
-import javax.persistence.EntityManager;
 import javafx.scene.paint.Color;
-import java.awt.*;
+import javafx.scene.shape.Circle;
+import javafx.stage.Stage;
+import org.example.chatapp.entity.Message;
+import org.example.chatapp.entity.User;
+import org.example.chatapp.utils.JPAUtil;
+
+import javax.persistence.EntityManager;
 import java.io.*;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class ChatController {
 
-    // Liste des contacts (facultatif pour ton chat)
-    @FXML
-    private ListView<String> contactsList;
+    // ======================= FXML =======================
 
-    // Champ où l'utilisateur tape son message
-    @FXML
-    private TextField messageField;
+    @FXML private ListView<String> contactsList;
+    @FXML private TextField messageField;
+    @FXML private TextField searchField;
+    @FXML private VBox messagesBox;
+    @FXML private Label usernameLabel;
+    @FXML private VBox welcomeBox;
+    @FXML private HBox chatHeader;
+    @FXML private HBox messageBar;
+    @FXML private ScrollPane messagesScroll;
+    @FXML private Button logoutButton;
 
-    // Boîte pour afficher les messages
-    @FXML
-    private VBox messagesBox;
+    // ── Profil utilisateur connecté (sidebar) ──
+    @FXML private Label  currentUserLabel;
+    @FXML private Label  avatarInitiale;
+    @FXML private Circle avatarCircle;
+    @FXML private Circle myStatusDot;
+    @FXML private Circle myStatusDotBadge;
+    @FXML private Label  myStatusLabel;
 
-    // Label pour afficher le nom de l'utilisateur connecté
-    @FXML
-    private Label usernameLabel;
+    // ── Header contact sélectionné ──
+    @FXML private Label  contactInitiale;
+    @FXML private Circle contactStatusDot;
+    @FXML private Label  contactStatusLabel;
 
-    private String username;// utilisateur connecté
-    private String selectedContact;    // contact sélectionné dans la liste
+    // ======================= COULEURS =======================
+
+    private static final Color ONLINE_COLOR  = Color.web("#4ECDC4");
+    private static final Color OFFLINE_COLOR = Color.web("#666680");
+
+    // ======================= VARIABLES =======================
+
+    private String username;
+    private String selectedContact;
+    private List<String> allUsers    = new ArrayList<>();
+    private List<String> onlineUsers = new ArrayList<>();
 
     private Socket socket;
     private BufferedReader bufferedReader;
     private BufferedWriter bufferedWriter;
 
-    // Méthode pour initialiser le nom d'utilisateur depuis HelloController
+    // ======================= INITIALISATION =======================
+
     public void setUsername(String username) {
         this.username = username;
+
+        currentUserLabel.setText(username);
+        avatarInitiale.setText(String.valueOf(username.charAt(0)).toUpperCase());
+        setMyStatus(true);
+
+        chargerTousLesUtilisateurs();   // ← appel correct, méthode séparée
         connectToServer();
         setupContactClickListener();
+        setupSearch();
     }
+
+    // ======================= CHARGER UTILISATEURS =======================
+
+    private void chargerTousLesUtilisateurs() {
+        EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
+        try {
+            List<User> users = em.createQuery(
+                    "SELECT u FROM User u", User.class).getResultList();
+
+            System.out.println("=== TOTAL USERS EN BASE : " + users.size() + " ===");
+            users.forEach(u -> System.out.println("  → " + u.getUsername()));
+
+            allUsers.clear();
+            for (User u : users) {
+                if (!u.getUsername().equals(username)) {
+                    allUsers.add(u.getUsername());
+                }
+            }
+
+            System.out.println("=== CONTACTS A AFFICHER : " + allUsers.size() + " ===");
+
+            // Platform.runLater garantit la mise à jour sur le thread JavaFX
+            Platform.runLater(() -> contactsList.getItems().setAll(allUsers));
+
+        } finally {
+            em.close();
+        }
+    }
+
+    // ======================= RECHERCHE =======================
+
+    private void setupSearch() {
+        if (searchField == null) return;
+        searchField.textProperty().addListener((obs, oldVal, newVal) -> {
+            String s = newVal.toLowerCase();
+            List<String> filtered = allUsers.stream()
+                    .filter(u -> u.toLowerCase().contains(s))
+                    .collect(Collectors.toList());
+            contactsList.getItems().setAll(filtered);
+        });
+    }
+
+    // ======================= CONNEXION SERVEUR =======================
 
     private void connectToServer() {
         try {
             socket = new Socket("localhost", 1234);
             bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-            // Envoyer le username au serveur (ClientHandler l'attend en premier)
             bufferedWriter.write(username);
             bufferedWriter.newLine();
             bufferedWriter.flush();
-
-            // Lancer l'écoute des messages entrants
             startListening();
-
         } catch (IOException e) {
-            afficherErreurConnexion();
+            Platform.runLater(() -> {
+                setMyStatus(false);
+                afficherErreurConnexion();
+            });
         }
     }
 
-    private void startListening() {
-        Thread listenerThread = new Thread(() -> {
-            try {
-                String messageFromServer;
-                while ((messageFromServer = bufferedReader.readLine()) != null) {
-                    final String msg = messageFromServer;
+    // ======================= ECOUTE SERVEUR =======================
 
-                    if (msg.startsWith("USERLIST|")) {
-                        // Mise à jour de la liste des contacts
-                        Platform.runLater(() -> updateContactsList(msg));
+    private void startListening() {
+        Thread t = new Thread(() -> {
+            try {
+                String msg;
+                while ((msg = bufferedReader.readLine()) != null) {
+                    final String line = msg;
+                    if (line.startsWith("USERLIST|")) {
+                        Platform.runLater(() -> updateOnlineUsers(line));
                     } else {
-                        // Message normal : format "sender|content"
-                        String[] parts = msg.split("\\|", 2);
+                        String[] parts = line.split("\\|", 2);
                         if (parts.length == 2) {
-                            String sender = parts[0];
+                            String sender  = parts[0];
                             String content = parts[1];
-                            // Afficher seulement si c'est la conversation ouverte
                             if (sender.equals(selectedContact)) {
                                 Platform.runLater(() -> afficherBulle(content, false));
                             }
@@ -94,76 +165,158 @@ public class ChatController {
                     }
                 }
             } catch (IOException e) {
-                Platform.runLater(this::afficherErreurConnexion); // RG10
+                Platform.runLater(() -> {
+                    setMyStatus(false);
+                    afficherErreurConnexion();
+                });
             }
         });
-        listenerThread.setDaemon(true);
-        listenerThread.start();
+        t.setDaemon(true);
+        t.start();
     }
 
-    private void updateContactsList(String userListMessage) {
-        // Format : "USERLIST|alice,bob,charlie,"
-        String raw = userListMessage.replace("USERLIST|", "");
-        String[] users = raw.split(",");
+    // ======================= UTILISATEURS EN LIGNE =======================
 
-        contactsList.getItems().clear();
-        for (String user : users) {
-            if (!user.isEmpty() && !user.equals(username)) {
-                contactsList.getItems().add(user);
-            }
+    private void updateOnlineUsers(String msg) {
+        String raw = msg.replace("USERLIST|", "");
+        onlineUsers = new ArrayList<>(List.of(raw.split(",")));
+        contactsList.refresh();
+        if (selectedContact != null) {
+            updateContactStatusHeader(selectedContact);
         }
     }
 
+    // ======================= STATUT MOI =======================
+
+    private void setMyStatus(boolean online) {
+        Color c   = online ? ONLINE_COLOR : OFFLINE_COLOR;
+        String txt = online ? "En ligne" : "Déconnecté";
+        String bg  = online
+                ? "-fx-background-color: rgba(78,205,196,0.2);"
+                : "-fx-background-color: rgba(100,100,128,0.2);";
+
+        myStatusDot.setFill(c);
+        myStatusDotBadge.setFill(c);
+        myStatusLabel.setText(txt);
+        myStatusLabel.setStyle("-fx-text-fill: " + toHex(c) + "; -fx-font-size: 10px; -fx-font-weight: bold;");
+        myStatusLabel.getParent().setStyle(bg + "-fx-background-radius: 20; -fx-padding: 2 8 2 6;");
+    }
+
+    // ======================= STATUT CONTACT =======================
+
+    private void updateContactStatusHeader(String contact) {
+        boolean online = onlineUsers.contains(contact);
+        Color c = online ? ONLINE_COLOR : OFFLINE_COLOR;
+        contactStatusDot.setFill(c);
+        contactStatusLabel.setText(online ? "En ligne" : "Hors ligne");
+        contactStatusLabel.setStyle("-fx-text-fill: " + toHex(c) + "; -fx-font-size: 11px;");
+    }
+
+    // ======================= CELLULES CONTACTS =======================
+
     private void setupContactClickListener() {
+
         contactsList.setCellFactory(lv -> new ListCell<>() {
             @Override
             protected void updateItem(String user, boolean empty) {
                 super.updateItem(user, empty);
+
                 if (empty || user == null) {
                     setText(null);
                     setGraphic(null);
-                } else {
-                    // Style de chaque cellule contact
-                    HBox cell = new HBox(10);
-                    cell.setAlignment(Pos.CENTER_LEFT);
-                    cell.setPadding(new Insets(8, 12, 8, 12));
-
-                    Label avatar = new Label("👤");
-                    avatar.setFont(Font.font(20));
-
-                    Label name = new Label(user);
-                    name.setTextFill(Color.WHITE);
-                    name.setFont(Font.font(14));
-
-                    cell.getChildren().addAll(avatar, name);
-                    setGraphic(cell);
                     setStyle("-fx-background-color: transparent;");
+                    return;
                 }
+
+                boolean online = onlineUsers.contains(user);
+
+                // Conteneur principal
+                HBox cell = new HBox(10);
+                cell.setAlignment(Pos.CENTER_LEFT);
+                cell.setPadding(new Insets(8, 10, 8, 8));
+
+                // Avatar (AnchorPane)
+                javafx.scene.layout.AnchorPane ap = new javafx.scene.layout.AnchorPane();
+                ap.setPrefSize(40, 40);
+                ap.setMinSize(40, 40);
+
+                Circle bgCircle = new Circle(18);
+                bgCircle.setFill(online ? Color.web("#A8D8F0") : Color.web("#9B8AB0"));
+                javafx.scene.layout.AnchorPane.setTopAnchor(bgCircle, 2.0);
+                javafx.scene.layout.AnchorPane.setLeftAnchor(bgCircle, 2.0);
+
+                Label init = new Label(String.valueOf(user.charAt(0)).toUpperCase());
+                init.setStyle("-fx-text-fill: #3D1A47; -fx-font-size: 13px; -fx-font-weight: bold;");
+                javafx.scene.layout.AnchorPane.setTopAnchor(init, 10.0);
+                javafx.scene.layout.AnchorPane.setLeftAnchor(init, 10.0);
+
+                Circle dot = new Circle(6);
+                dot.setFill(online ? ONLINE_COLOR : OFFLINE_COLOR);
+                dot.setStroke(Color.web("#6a3bbf"));
+                dot.setStrokeWidth(2);
+                javafx.scene.layout.AnchorPane.setBottomAnchor(dot, 0.0);
+                javafx.scene.layout.AnchorPane.setRightAnchor(dot, 0.0);
+
+                ap.getChildren().addAll(bgCircle, init, dot);
+
+                // Infos texte
+                VBox info = new VBox(2);
+                HBox.setHgrow(info, Priority.ALWAYS);
+
+                Label name = new Label(user);
+                name.setStyle("-fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;");
+
+                Label statusTxt = new Label(online ? "En ligne" : "Hors ligne");
+                statusTxt.setStyle("-fx-text-fill: " +
+                        (online ? "#4ECDC4" : "rgba(255,255,255,0.5)") +
+                        "; -fx-font-size: 10px;");
+
+                info.getChildren().addAll(name, statusTxt);
+                cell.getChildren().addAll(ap, info);
+
+                setGraphic(cell);
+                setText(null);
+                setStyle("-fx-background-color: " +
+                        (isSelected() ? "rgba(255,255,255,0.15)" : "transparent") +
+                        "; -fx-background-radius: 10; -fx-padding: 2 0;");
             }
         });
 
-        // Clic sur un contact → charger la conversation
-        contactsList.setOnMouseClicked(event -> {
+        // Clic contact → ouvre la conversation
+        contactsList.setOnMouseClicked(e -> {
             String clicked = contactsList.getSelectionModel().getSelectedItem();
-            if (clicked != null && !clicked.equals(selectedContact)) {
-                selectedContact = clicked;
-                messagesBox.getChildren().clear();
-                chargerHistorique(selectedContact);
-            }
+            if (clicked == null || clicked.equals(selectedContact)) return;
+
+            selectedContact = clicked;
+            messagesBox.getChildren().clear();
+
+            usernameLabel.setText(selectedContact);
+            contactInitiale.setText(String.valueOf(selectedContact.charAt(0)).toUpperCase());
+            updateContactStatusHeader(selectedContact);
+
+            welcomeBox.setVisible(false);
+            welcomeBox.setManaged(false);
+            chatHeader.setVisible(true);
+            chatHeader.setManaged(true);
+            messageBar.setVisible(true);
+            messageBar.setManaged(true);
+            messagesScroll.setVisible(true);
+            messagesScroll.setManaged(true);
+
+            chargerHistorique(selectedContact);
         });
     }
 
+    // ======================= HISTORIQUE =======================
 
     private void chargerHistorique(String contact) {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
-            // RG8 : ordre chronologique
             List<Message> messages = em.createQuery(
                             "SELECT m FROM Message m " +
                                     "WHERE (m.sender.username = :me AND m.receiver.username = :contact) " +
                                     "OR (m.sender.username = :contact AND m.receiver.username = :me) " +
-                                    "ORDER BY m.dateEnvoi ASC",
-                            Message.class)
+                                    "ORDER BY m.dateEnvoi ASC", Message.class)
                     .setParameter("me", username)
                     .setParameter("contact", contact)
                     .getResultList();
@@ -172,82 +325,96 @@ public class ChatController {
                 boolean isMine = m.getSender().getUsername().equals(username);
                 afficherBulle(m.getContenu(), isMine);
             }
-
         } finally {
             em.close();
         }
     }
 
-    // Méthode appelée quand l'utilisateur clique sur "Envoyer"
+    // ======================= ENVOI MESSAGE =======================
+
     @FXML
     private void sendMessage() {
         String content = messageField.getText();
-
         if (selectedContact == null) {
             afficherAlerte("Sélectionne un contact d'abord !");
             return;
         }
-
-        // RG7 : validation
         if (content == null || content.trim().isEmpty()) return;
-        if (content.length() > 1000) {
-            afficherAlerte("Message trop long (max 1000 caractères)");
-            return;
-        }
-
         try {
-            // Format : "sender|receiver|content"
             bufferedWriter.write(username + "|" + selectedContact + "|" + content);
             bufferedWriter.newLine();
             bufferedWriter.flush();
-
-            // Afficher ma bulle immédiatement
             afficherBulle(content, true);
             messageField.clear();
-
         } catch (IOException e) {
-            afficherErreurConnexion(); // RG10
+            afficherErreurConnexion();
         }
     }
 
+    // ======================= BULLES =======================
+
     private void afficherBulle(String content, boolean isMine) {
         HBox wrapper = new HBox();
-        wrapper.setPadding(new Insets(2, 10, 2, 10));
+        wrapper.setPadding(new Insets(4));
 
         Label bulle = new Label(content);
         bulle.setWrapText(true);
         bulle.setMaxWidth(400);
-        bulle.setPadding(new Insets(10, 15, 10, 15));
-        bulle.setFont(Font.font(13));
+        bulle.setPadding(new Insets(10, 14, 10, 14));
 
         if (isMine) {
-            // Ma bulle → droite, violet
-            bulle.setStyle("-fx-background-color: #8a4fff; " +
-                    "-fx-text-fill: white; " +
-                    "-fx-background-radius: 18 18 4 18;");
+            bulle.setStyle(
+                    "-fx-background-color: #6a3bbf;" +
+                            "-fx-text-fill: white;" +
+                            "-fx-background-radius: 18 18 4 18;");
             wrapper.setAlignment(Pos.CENTER_RIGHT);
         } else {
-            // Bulle reçue → gauche, gris clair
-            bulle.setStyle("-fx-background-color: #f0ebff; " +
-                    "-fx-text-fill: #333; " +
-                    "-fx-background-radius: 18 18 18 4;");
+            bulle.setStyle(
+                    "-fx-background-color: #f0ebff;" +
+                            "-fx-text-fill: #1A0A22;" +
+                            "-fx-background-radius: 18 18 18 4;");
             wrapper.setAlignment(Pos.CENTER_LEFT);
         }
 
         wrapper.getChildren().add(bulle);
         messagesBox.getChildren().add(wrapper);
+        Platform.runLater(() -> messagesScroll.setVvalue(1.0));
+    }
+
+    // ======================= DECONNEXION =======================
+
+    @FXML
+    private void logout() {
+        try {
+            if (socket != null) socket.close();
+            FXMLLoader loader = new FXMLLoader(
+                    getClass().getResource("/org/example/chatapp/login-view.fxml"));
+            Stage stage = (Stage) logoutButton.getScene().getWindow();
+            stage.setScene(new Scene(loader.load()));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // ======================= UTILS =======================
+
+    private String toHex(Color c) {
+        return String.format("#%02X%02X%02X",
+                (int)(c.getRed()   * 255),
+                (int)(c.getGreen() * 255),
+                (int)(c.getBlue()  * 255));
     }
 
     private void afficherErreurConnexion() {
-        Alert alert = new Alert(Alert.AlertType.ERROR);
-        alert.setTitle("Connexion perdue");
-        alert.setContentText("La connexion au serveur a été perdue. Vous êtes hors ligne.");
-        alert.show();
+        Alert a = new Alert(Alert.AlertType.ERROR);
+        a.setTitle("Connexion perdue");
+        a.setContentText("Connexion au serveur perdue. Vous êtes maintenant hors ligne.");
+        a.show();
     }
 
     private void afficherAlerte(String message) {
-        Alert alert = new Alert(Alert.AlertType.WARNING);
-        alert.setContentText(message);
-        alert.show();
+        Alert a = new Alert(Alert.AlertType.WARNING);
+        a.setContentText(message);
+        a.show();
     }
 }

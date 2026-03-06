@@ -31,6 +31,7 @@ public class User {
         this.status = Status.OFFLINE;
     }
 
+
     public User(long id, String username, String password, Status status, LocalDateTime dateCreation) {
         this.id = id;
         this.username = username;

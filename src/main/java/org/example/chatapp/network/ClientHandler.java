@@ -28,7 +28,7 @@ public class ClientHandler implements Runnable {
 
     public ClientHandler(Socket socket) {
         try {
-            this.socket = socket;
+            this.socket        = socket;
             this.bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             this.bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
@@ -40,8 +40,6 @@ public class ClientHandler implements Runnable {
 
             // Ajouter dans la liste des clients connectés
             clientHandlers.add(this);
-            sendUserListToAllClients();
-
 
             // RG12 : log connexion
             System.out.println("[LOG] " + clientUsername + " connecté.");
@@ -49,7 +47,7 @@ public class ClientHandler implements Runnable {
             // Envoyer les messages en attente (RG6)
             deliverPendingMessages();
 
-            // Notifier tous les clients de la nouvelle liste
+            // ✅ UN SEUL broadcast de la liste — notifie tout le monde
             broadcastUserList();
 
         } catch (IOException e) {
@@ -67,8 +65,7 @@ public class ClientHandler implements Runnable {
             try {
                 messageFromClient = bufferedReader.readLine();
 
-                // null = client déconnecté proprement
-                if (messageFromClient == null) break;
+                if (messageFromClient == null) break;  // client déconnecté proprement
 
                 handlePrivateMessage(messageFromClient);
 
@@ -90,7 +87,7 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        String sender  = parts[0];
+        String sender   = parts[0];
         String receiver = parts[1];
         String content  = parts[2];
 
@@ -104,20 +101,22 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // Sauvegarder en base dans tous les cas
+        // ✅ Sauvegarder en base (méthode corrigée)
         saveMessage(sender, receiver, content);
 
-        // Chercher si le destinataire est connecté
+        // Chercher si le destinataire est connecté et lui envoyer
         boolean destinataireConnecte = false;
-        for (ClientHandler clientHandler : clientHandlers) {
-            if (clientHandler.clientUsername.equals(receiver)) {
-                try {
-                    clientHandler.bufferedWriter.write(sender + "|" + content);
-                    clientHandler.bufferedWriter.newLine();
-                    clientHandler.bufferedWriter.flush();
-                    destinataireConnecte = true;
-                } catch (IOException e) {
-                    e.printStackTrace();
+        synchronized (clientHandlers) {
+            for (ClientHandler ch : clientHandlers) {
+                if (ch.clientUsername.equals(receiver)) {
+                    try {
+                        ch.bufferedWriter.write(sender + "|" + content);
+                        ch.bufferedWriter.newLine();
+                        ch.bufferedWriter.flush();
+                        destinataireConnecte = true;
+                    } catch (IOException e) {
+                        System.err.println("[ERREUR] Impossible d'envoyer à " + receiver);
+                    }
                 }
             }
         }
@@ -137,7 +136,7 @@ public class ClientHandler implements Runnable {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
             List<Message> pending = em.createQuery(
-                            "SELECT m FROM org.example.chatapp.entity.Message m " +
+                            "SELECT m FROM Message m " +
                                     "WHERE m.receiver.username = :username " +
                                     "AND m.statut = :statut " +
                                     "ORDER BY m.dateEnvoi ASC",
@@ -147,7 +146,8 @@ public class ClientHandler implements Runnable {
                     .getResultList();
 
             if (!pending.isEmpty()) {
-                System.out.println("[INFO] Livraison de " + pending.size() + " message(s) en attente à " + clientUsername);
+                System.out.println("[INFO] Livraison de " + pending.size()
+                        + " message(s) en attente à " + clientUsername);
             }
 
             for (Message m : pending) {
@@ -162,7 +162,7 @@ public class ClientHandler implements Runnable {
                     em.getTransaction().commit();
 
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    System.err.println("[ERREUR] Livraison message en attente échouée.");
                 }
             }
         } finally {
@@ -172,22 +172,37 @@ public class ClientHandler implements Runnable {
 
     // ===================== BROADCAST LISTE USERS =====================
 
+    /**
+     * Envoie la liste des utilisateurs connectés à TOUS les clients.
+     * ✅ Vérifie que le socket est ouvert avant d'écrire (évite le SocketException).
+     */
     public static void broadcastUserList() {
-        // Construire la liste : "USERLIST|alice,bob,charlie,"
-        StringBuilder userList = new StringBuilder("USERLIST|");
-        for (ClientHandler ch : clientHandlers) {
-            userList.append(ch.clientUsername).append(",");
+        // Construire le message : "USERLIST|alice,bob,charlie"
+        StringBuilder sb = new StringBuilder("USERLIST|");
+        synchronized (clientHandlers) {
+            for (ClientHandler ch : clientHandlers) {
+                sb.append(ch.clientUsername).append(",");
+            }
         }
-        String msg = userList.toString();
+        // Supprimer la virgule finale si présente
+        String msg = sb.toString();
+        if (msg.endsWith(",")) {
+            msg = msg.substring(0, msg.length() - 1);
+        }
 
-        // Envoyer à tous les clients connectés
-        for (ClientHandler ch : clientHandlers) {
-            try {
-                ch.bufferedWriter.write(msg);
-                ch.bufferedWriter.newLine();
-                ch.bufferedWriter.flush();
-            } catch (IOException e) {
-                e.printStackTrace();
+        // Envoyer à tous, en ignorant les sockets fermés
+        synchronized (clientHandlers) {
+            for (ClientHandler ch : clientHandlers) {
+                try {
+                    // ✅ Vérifie que le socket est encore ouvert
+                    if (ch.socket != null && !ch.socket.isClosed()) {
+                        ch.bufferedWriter.write(msg);
+                        ch.bufferedWriter.newLine();
+                        ch.bufferedWriter.flush();
+                    }
+                } catch (IOException e) {
+                    System.err.println("[ERREUR] broadcastUserList → " + ch.clientUsername);
+                }
             }
         }
     }
@@ -200,7 +215,7 @@ public class ClientHandler implements Runnable {
         // RG4 : passer OFFLINE
         updateUserStatus(clientUsername, Status.OFFLINE);
 
-        // Notifier tous les clients
+        // Notifier tous les clients restants
         broadcastUserList();
 
         // RG12 : log déconnexion
@@ -212,7 +227,7 @@ public class ClientHandler implements Runnable {
         try {
             if (bufferedReader != null) bufferedReader.close();
             if (bufferedWriter != null) bufferedWriter.close();
-            if (socket != null)         socket.close();
+            if (socket        != null) socket.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -231,8 +246,7 @@ public class ClientHandler implements Runnable {
                     .getResultList();
 
             if (!users.isEmpty()) {
-                User user = users.get(0);
-                user.setStatus(status);
+                users.get(0).setStatus(status);
             } else {
                 System.out.println("[WARN] Utilisateur introuvable : " + username);
             }
@@ -243,51 +257,55 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    private void sendUserListToAllClients(){
-
-        StringBuilder userList = new StringBuilder("USERLIST|");
-
-        synchronized (clientHandlers){
-            for(ClientHandler ch : clientHandlers){
-                userList.append(ch.clientUsername).append(",");
-            }
-        }
-
-        for(ClientHandler ch : clientHandlers){
-            try{
-                ch.bufferedWriter.write(userList.toString());
-                ch.bufferedWriter.newLine();
-                ch.bufferedWriter.flush();
-            }catch(IOException e){
-                e.printStackTrace();
-            }
-        }
-    }
-
-    private void saveMessage(String sender, String receiver, String content) {
+    /**
+     * ✅ CORRIGÉ : crée et persiste réellement le message en base.
+     */
+    private void saveMessage(String senderUsername, String receiverUsername, String content) {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
-            em.getTransaction().begin();
-
+            // Chercher sender et receiver
             List<User> senderList = em.createQuery(
                             "SELECT u FROM User u WHERE u.username = :username", User.class)
-                    .setParameter("username", sender)
+                    .setParameter("username", senderUsername)
                     .getResultList();
 
             List<User> receiverList = em.createQuery(
                             "SELECT u FROM User u WHERE u.username = :username", User.class)
-                    .setParameter("username", receiver)
+                    .setParameter("username", receiverUsername)
                     .getResultList();
 
-            if(senderList.isEmpty() || receiverList.isEmpty()){
-                System.out.println("[ERREUR] Sender ou Receiver introuvable.");
-                em.getTransaction().rollback();
+            if (senderList.isEmpty() || receiverList.isEmpty()) {
+                System.out.println("[ERREUR] saveMessage — sender ou receiver introuvable.");
                 return;
             }
 
-            User senderUser = senderList.get(0);
-            User receiverUser = receiverList.get(0);
+            User sender   = senderList.get(0);
+            User receiver = receiverList.get(0);
 
+            // ✅ Déterminer le statut selon si le destinataire est connecté
+            boolean receiverOnline = clientHandlers.stream()
+                    .anyMatch(ch -> ch.clientUsername.equals(receiverUsername));
+
+            StatusMessage statut = receiverOnline ? StatusMessage.RECU : StatusMessage.ENVOYE;
+
+            // ✅ Créer et persister le message
+            Message message = new Message();
+            message.setSender(sender);
+            message.setReceiver(receiver);
+            message.setContenu(content);
+            message.setDateEnvoi(LocalDateTime.now());
+            message.setStatut(statut);
+
+            em.getTransaction().begin();
+            em.persist(message);
+            em.getTransaction().commit();
+
+            System.out.println("[DB] Message sauvegardé : " + senderUsername
+                    + " → " + receiverUsername + " [" + statut + "]");
+
+        } catch (Exception e) {
+            if (em.getTransaction().isActive()) em.getTransaction().rollback();
+            System.err.println("[ERREUR] saveMessage : " + e.getMessage());
         } finally {
             em.close();
         }
