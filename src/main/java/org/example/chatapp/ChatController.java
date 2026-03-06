@@ -77,10 +77,30 @@ public class ChatController {
         avatarInitiale.setText(String.valueOf(username.charAt(0)).toUpperCase());
         setMyStatus(true);
 
-        chargerTousLesUtilisateurs();   // ← appel correct, méthode séparée
+        chargerTousLesUtilisateurs();
         connectToServer();
         setupContactClickListener();
         setupSearch();
+    }
+
+    // ======================= DECONNEXION PROPRE =======================
+
+    /**
+     * ✅ Appelé par HelloController quand on ferme la fenêtre (RG4 + RG10).
+     * Ferme le socket → le serveur détecte null → passe OFFLINE en base.
+     */
+    public void disconnect() {
+        try {
+            if (socket != null && !socket.isClosed()) {
+                socket.close();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        // Met à jour visuellement si le thread JavaFX est encore actif
+        try {
+            Platform.runLater(() -> setMyStatus(false));
+        } catch (Exception ignored) {}
     }
 
     // ======================= CHARGER UTILISATEURS =======================
@@ -103,7 +123,7 @@ public class ChatController {
 
             System.out.println("=== CONTACTS A AFFICHER : " + allUsers.size() + " ===");
 
-            // Platform.runLater garantit la mise à jour sur le thread JavaFX
+            // Met à jour la ListView sur le thread JavaFX
             Platform.runLater(() -> contactsList.getItems().setAll(allUsers));
 
         } finally {
@@ -165,10 +185,8 @@ public class ChatController {
                     }
                 }
             } catch (IOException e) {
-                Platform.runLater(() -> {
-                    setMyStatus(false);
-                    afficherErreurConnexion();
-                });
+                // Connexion coupée → passe hors ligne visuellement
+                Platform.runLater(() -> setMyStatus(false));
             }
         });
         t.setDaemon(true);
@@ -189,7 +207,7 @@ public class ChatController {
     // ======================= STATUT MOI =======================
 
     private void setMyStatus(boolean online) {
-        Color c   = online ? ONLINE_COLOR : OFFLINE_COLOR;
+        Color c    = online ? ONLINE_COLOR : OFFLINE_COLOR;
         String txt = online ? "En ligne" : "Déconnecté";
         String bg  = online
                 ? "-fx-background-color: rgba(78,205,196,0.2);"
@@ -381,15 +399,16 @@ public class ChatController {
         Platform.runLater(() -> messagesScroll.setVvalue(1.0));
     }
 
-    // ======================= DECONNEXION =======================
+    // ======================= BOUTON DECONNEXION =======================
 
     @FXML
     private void logout() {
+        disconnect(); // ✅ ferme le socket proprement
         try {
-            if (socket != null) socket.close();
             FXMLLoader loader = new FXMLLoader(
                     getClass().getResource("/org/example/chatapp/login-view.fxml"));
             Stage stage = (Stage) logoutButton.getScene().getWindow();
+            stage.setOnCloseRequest(null); // reset le handler de fermeture
             stage.setScene(new Scene(loader.load()));
         } catch (IOException e) {
             e.printStackTrace();

@@ -28,7 +28,7 @@ public class ClientHandler implements Runnable {
 
     public ClientHandler(Socket socket) {
         try {
-            this.socket        = socket;
+            this.socket         = socket;
             this.bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             this.bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
@@ -47,7 +47,7 @@ public class ClientHandler implements Runnable {
             // Envoyer les messages en attente (RG6)
             deliverPendingMessages();
 
-            // ✅ UN SEUL broadcast de la liste — notifie tout le monde
+            // UN SEUL broadcast de la liste — notifie tout le monde
             broadcastUserList();
 
         } catch (IOException e) {
@@ -65,7 +65,7 @@ public class ClientHandler implements Runnable {
             try {
                 messageFromClient = bufferedReader.readLine();
 
-                if (messageFromClient == null) break;  // client déconnecté proprement
+                if (messageFromClient == null) break; // client déconnecté proprement
 
                 handlePrivateMessage(messageFromClient);
 
@@ -101,7 +101,7 @@ public class ClientHandler implements Runnable {
             return;
         }
 
-        // ✅ Sauvegarder en base (méthode corrigée)
+        // Sauvegarder en base
         saveMessage(sender, receiver, content);
 
         // Chercher si le destinataire est connecté et lui envoyer
@@ -172,62 +172,69 @@ public class ClientHandler implements Runnable {
 
     // ===================== BROADCAST LISTE USERS =====================
 
-    /**
-     * Envoie la liste des utilisateurs connectés à TOUS les clients.
-     * ✅ Vérifie que le socket est ouvert avant d'écrire (évite le SocketException).
-     */
     public static void broadcastUserList() {
-        // Construire le message : "USERLIST|alice,bob,charlie"
+
+        // ✅ Copie snapshot pour éviter ConcurrentModificationException
+        List<ClientHandler> snapshot = new ArrayList<>(clientHandlers);
+
+        // Construire le message avec uniquement les connectés
         StringBuilder sb = new StringBuilder("USERLIST|");
-        synchronized (clientHandlers) {
-            for (ClientHandler ch : clientHandlers) {
-                sb.append(ch.clientUsername).append(",");
-            }
+        for (ClientHandler ch : snapshot) {
+            sb.append(ch.clientUsername).append(",");
         }
-        // Supprimer la virgule finale si présente
+
         String msg = sb.toString();
         if (msg.endsWith(",")) {
             msg = msg.substring(0, msg.length() - 1);
         }
 
-        // Envoyer à tous, en ignorant les sockets fermés
-        synchronized (clientHandlers) {
-            for (ClientHandler ch : clientHandlers) {
-                try {
-                    // ✅ Vérifie que le socket est encore ouvert
-                    if (ch.socket != null && !ch.socket.isClosed()) {
-                        ch.bufferedWriter.write(msg);
-                        ch.bufferedWriter.newLine();
-                        ch.bufferedWriter.flush();
-                    }
-                } catch (IOException e) {
-                    System.err.println("[ERREUR] broadcastUserList → " + ch.clientUsername);
+        // ✅ Envoyer à tous, retirer silencieusement les sockets fermés
+        List<ClientHandler> aRetirer = new ArrayList<>();
+
+        for (ClientHandler ch : snapshot) {
+            try {
+                if (ch.socket != null && !ch.socket.isClosed() && ch.bufferedWriter != null) {
+                    ch.bufferedWriter.write(msg);
+                    ch.bufferedWriter.newLine();
+                    ch.bufferedWriter.flush();
+                } else {
+                    aRetirer.add(ch);
                 }
+            } catch (IOException e) {
+                // Socket fermé → on le retire silencieusement sans log d'erreur
+                aRetirer.add(ch);
             }
         }
+
+        // Nettoyer les clients dont le socket est fermé
+        clientHandlers.removeAll(aRetirer);
     }
 
     // ===================== DÉCONNEXION =====================
 
     public void removeClientHandler() {
+        // ✅ Retire le client AVANT de broadcaster
         clientHandlers.remove(this);
 
-        // RG4 : passer OFFLINE
+        // RG4 : passer OFFLINE en base
         updateUserStatus(clientUsername, Status.OFFLINE);
-
-        // Notifier tous les clients restants
-        broadcastUserList();
 
         // RG12 : log déconnexion
         System.out.println("[LOG] " + clientUsername + " déconnecté.");
+
+        // ✅ Notifie les clients restants (ce client est déjà retiré)
+        broadcastUserList();
     }
 
     public void closeEverything(Socket socket, BufferedReader bufferedReader, BufferedWriter bufferedWriter) {
-        removeClientHandler();
+        // ✅ Appelle removeClientHandler() une seule fois
+        if (clientHandlers.contains(this)) {
+            removeClientHandler();
+        }
         try {
             if (bufferedReader != null) bufferedReader.close();
             if (bufferedWriter != null) bufferedWriter.close();
-            if (socket        != null) socket.close();
+            if (socket         != null) socket.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
@@ -257,13 +264,9 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    /**
-     * ✅ CORRIGÉ : crée et persiste réellement le message en base.
-     */
     private void saveMessage(String senderUsername, String receiverUsername, String content) {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
-            // Chercher sender et receiver
             List<User> senderList = em.createQuery(
                             "SELECT u FROM User u WHERE u.username = :username", User.class)
                     .setParameter("username", senderUsername)
@@ -282,13 +285,13 @@ public class ClientHandler implements Runnable {
             User sender   = senderList.get(0);
             User receiver = receiverList.get(0);
 
-            // ✅ Déterminer le statut selon si le destinataire est connecté
+            // Déterminer le statut selon si le destinataire est connecté
             boolean receiverOnline = clientHandlers.stream()
                     .anyMatch(ch -> ch.clientUsername.equals(receiverUsername));
 
             StatusMessage statut = receiverOnline ? StatusMessage.RECU : StatusMessage.ENVOYE;
 
-            // ✅ Créer et persister le message
+            // Créer et persister le message
             Message message = new Message();
             message.setSender(sender);
             message.setReceiver(receiver);
