@@ -21,51 +21,40 @@ import java.util.List;
 
 public class HelloController {
 
+    @FXML private TextField     username_input;
     @FXML private PasswordField password_input;
-    @FXML private TextField username_input;
-
-    // ======================= LOGIN =======================
 
     @FXML
     void login(ActionEvent event) {
-
         String username = username_input.getText().trim();
         String password = password_input.getText();
 
-        // ── Champs vides ─────────────────────────────────────────────────────
         if (username.isEmpty() || password.isEmpty()) {
             afficherAlerte(Alert.AlertType.WARNING,
                     "Champs manquants", "Veuillez remplir tous les champs !");
             return;
         }
 
-        // ── Vérification en base de données ──────────────────────────────────
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
-
             List<User> users = em.createQuery(
                             "SELECT u FROM User u WHERE u.username = :username", User.class)
                     .setParameter("username", username)
                     .getResultList();
 
-            // Username introuvable
             if (users.isEmpty()) {
                 afficherAlerte(Alert.AlertType.ERROR,
-                        "Erreur", "Nom d'utilisateur introuvable. Vérifiez votre username.");
+                        "Erreur", "Nom d'utilisateur introuvable.");
                 return;
             }
 
-            User user = users.get(0);
-
-            // Vérifier le mot de passe hashé (SHA-256)
-            String hashedInput = hashPassword(password);
-            if (!hashedInput.equals(user.getPassword())) {
+            if (!hashPassword(password).equals(users.get(0).getPassword())) {
                 afficherAlerte(Alert.AlertType.ERROR,
                         "Erreur", "Mot de passe incorrect !");
                 return;
             }
 
-            // ── Authentification réussie → ouvrir le chat ────────────────────
+            // ✅ Ouvrir le chat
             FXMLLoader loader = new FXMLLoader(
                     getClass().getResource("/org/example/chatapp/chat_view.fxml"));
             AnchorPane root = loader.load();
@@ -73,13 +62,23 @@ public class HelloController {
             ChatController chatController = loader.getController();
             chatController.setUsername(username);
 
+            // ✅ Enregistrer le controller actif globalement
+            HelloApplication.activeChatController = chatController;
+
             Stage stage = (Stage) username_input.getScene().getWindow();
 
-            // ✅ Fermeture de la fenêtre → déconnexion propre (RG4 + RG10)
-            stage.setOnCloseRequest(e -> chatController.disconnect());
+            // ✅ setOnCloseRequest sur la nouvelle scène aussi
+            stage.setOnCloseRequest(e -> {
+                if (HelloApplication.activeChatController != null) {
+                    HelloApplication.activeChatController.disconnect();
+                }
+                javafx.application.Platform.exit();
+                System.exit(0);
+            });
 
             stage.setScene(new Scene(root));
-            stage.setTitle("Chat - " + username);
+            stage.setTitle("FBChat - " + username);
+            stage.setResizable(false);
             stage.show();
 
         } catch (IOException e) {
@@ -89,8 +88,6 @@ public class HelloController {
         }
     }
 
-    // ======================= INSCRIPTION =======================
-
     @FXML
     void goToRegister(MouseEvent event) {
         try {
@@ -98,17 +95,20 @@ public class HelloController {
                     getClass().getResource("inscription-view.fxml"));
             AnchorPane root = loader.load();
             Stage stage = (Stage) username_input.getScene().getWindow();
+
+            // ✅ Sur la page login, pas de chatController actif
+            HelloApplication.activeChatController = null;
+            stage.setOnCloseRequest(e -> {
+                javafx.application.Platform.exit();
+                System.exit(0);
+            });
+
             stage.setScene(new Scene(root));
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    // ======================= UTILS =======================
-
-    /**
-     * Hash SHA-256 — même algorithme que InscriptionController.
-     */
     private String hashPassword(String plain) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -117,7 +117,7 @@ public class HelloController {
             for (byte b : hash) sb.append(String.format("%02x", b));
             return sb.toString();
         } catch (Exception e) {
-            return plain; // fallback
+            return plain;
         }
     }
 

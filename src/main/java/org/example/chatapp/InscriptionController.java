@@ -3,7 +3,10 @@ package org.example.chatapp;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
-import javafx.scene.control.*;
+import javafx.scene.control.Alert;
+import javafx.scene.control.PasswordField;
+import javafx.scene.control.TextField;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.AnchorPane;
 import javafx.stage.Stage;
 import org.example.chatapp.entity.User;
@@ -13,7 +16,10 @@ import org.example.chatapp.utils.JPAUtil;
 import javax.persistence.EntityManager;
 import javax.persistence.EntityTransaction;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.List;
 
 public class InscriptionController {
 
@@ -23,16 +29,17 @@ public class InscriptionController {
     @FXML private PasswordField password_input;
     @FXML private PasswordField confirm_password_input;
 
+    // ===================== INSCRIPTION =====================
+
     @FXML
     private void register() {
+        String fullname  = fullname_input.getText().trim();
+        String email     = email_input.getText().trim();
+        String username  = username_input.getText().trim();
+        String password  = password_input.getText();
+        String confirm   = confirm_password_input.getText();
 
-        String fullname = fullname_input.getText().trim();
-        String email    = email_input.getText().trim();
-        String username = username_input.getText().trim();
-        String password = password_input.getText();
-        String confirm  = confirm_password_input.getText();
-
-        // ── Validation des champs ────────────────────────────────────────────
+        // Validation champs vides
         if (fullname.isEmpty() || email.isEmpty() || username.isEmpty()
                 || password.isEmpty() || confirm.isEmpty()) {
             afficherAlerte(Alert.AlertType.WARNING,
@@ -40,18 +47,26 @@ public class InscriptionController {
             return;
         }
 
+        // Validation mot de passe
         if (!password.equals(confirm)) {
             afficherAlerte(Alert.AlertType.WARNING,
                     "Erreur", "Les mots de passe ne correspondent pas !");
             return;
         }
 
-        // ── Vérifier que le username n'existe pas déjà (RG1) ────────────────
+        // Validation complexité mot de passe
+        if (!isPasswordValid(password)) {
+            afficherAlerte(Alert.AlertType.WARNING, "Mot de passe faible",
+                    "Le mot de passe doit contenir au moins :\n" +
+                            "• 1 chiffre\n• 1 lettre\n• 1 caractère spécial (!@#$%^&*)");
+            return;
+        }
+
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         EntityTransaction tx = em.getTransaction();
 
         try {
-
+            // RG1 : username unique
             Long count = em.createQuery(
                             "SELECT COUNT(u) FROM User u WHERE u.username = :username", Long.class)
                     .setParameter("username", username)
@@ -64,13 +79,10 @@ public class InscriptionController {
                 return;
             }
 
-            // ── Créer et sauvegarder l'utilisateur ──────────────────────────
+            // RG9 : hash du mot de passe
             User newUser = new User();
             newUser.setUsername(username);
-
-            // Hash du mot de passe avec BCrypt (RG9)
             newUser.setPassword(hashPassword(password));
-
             newUser.setStatus(Status.OFFLINE);
             newUser.setDateCreation(LocalDateTime.now());
 
@@ -90,30 +102,14 @@ public class InscriptionController {
             if (tx.isActive()) tx.rollback();
             e.printStackTrace();
             afficherAlerte(Alert.AlertType.ERROR,
-                    "Erreur", "Une erreur est survenue lors de l'inscription : " + e.getMessage());
+                    "Erreur", "Une erreur est survenue : " + e.getMessage());
         } finally {
             em.close();
         }
     }
 
-    // ── Hash BCrypt du mot de passe ──────────────────────────────────────────
-    private String hashPassword(String plainPassword) {
-        // Si tu as BCrypt dans ton projet (org.mindrot.jbcrypt) :
-        // return BCrypt.hashpw(plainPassword, BCrypt.gensalt());
+    // ===================== RETOUR AU LOGIN =====================
 
-        // Sinon version simple avec SHA-256 (à remplacer par BCrypt si possible) :
-        try {
-            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(plainPassword.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (Exception e) {
-            return plainPassword; // fallback (ne pas utiliser en prod)
-        }
-    }
-
-    // ── Retour à la page login ───────────────────────────────────────────────
     @FXML
     private void goToLogin() {
         try {
@@ -127,7 +123,28 @@ public class InscriptionController {
         }
     }
 
-    // ── Utilitaire alerte ────────────────────────────────────────────────────
+    // ===================== UTILS =====================
+
+    private boolean isPasswordValid(String password) {
+        boolean hasLetter  = password.chars().anyMatch(Character::isLetter);
+        boolean hasDigit   = password.chars().anyMatch(Character::isDigit);
+        boolean hasSpecial = password.chars().anyMatch(c ->
+                "!@#$%^&*".indexOf(c) >= 0);
+        return hasLetter && hasDigit && hasSpecial;
+    }
+
+    private String hashPassword(String plain) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(plain.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return plain;
+        }
+    }
+
     private void afficherAlerte(Alert.AlertType type, String titre, String message) {
         Alert alert = new Alert(type);
         alert.setTitle(titre);

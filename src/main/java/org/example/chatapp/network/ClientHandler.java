@@ -28,26 +28,19 @@ public class ClientHandler implements Runnable {
 
     public ClientHandler(Socket socket) {
         try {
-            this.socket         = socket;
+            this.socket        = socket;
             this.bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             this.bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-            // Lire le username envoyé par le client en premier
             this.clientUsername = bufferedReader.readLine();
 
-            // RG4 : passer ONLINE à la connexion
+            kickIfAlreadyConnected(clientUsername);
             updateUserStatus(clientUsername, Status.ONLINE);
-
-            // Ajouter dans la liste des clients connectés
             clientHandlers.add(this);
 
-            // RG12 : log connexion
             System.out.println("[LOG] " + clientUsername + " connecté.");
 
-            // Envoyer les messages en attente (RG6)
             deliverPendingMessages();
-
-            // UN SEUL broadcast de la liste — notifie tout le monde
             broadcastUserList();
 
         } catch (IOException e) {
@@ -60,28 +53,53 @@ public class ClientHandler implements Runnable {
     @Override
     public void run() {
         String messageFromClient;
-
         while (socket.isConnected()) {
             try {
                 messageFromClient = bufferedReader.readLine();
-
-                if (messageFromClient == null) break; // client déconnecté proprement
-
+                if (messageFromClient == null) break;
                 handlePrivateMessage(messageFromClient);
-
             } catch (IOException e) {
                 closeEverything(socket, bufferedReader, bufferedWriter);
                 break;
             }
         }
+        closeEverything(socket, bufferedReader, bufferedWriter);
     }
 
-    // ===================== GESTION DES MESSAGES =====================
+    // ===================== KICK SESSION DUPLIQUE =====================
+
+    private void kickIfAlreadyConnected(String username) {
+        List<ClientHandler> snapshot = new ArrayList<>(clientHandlers);
+        for (ClientHandler ch : snapshot) {
+            if (username.equalsIgnoreCase(ch.clientUsername)) {
+                try {
+                    ch.bufferedWriter.write("KICKED");
+                    ch.bufferedWriter.newLine();
+                    ch.bufferedWriter.flush();
+                    System.out.println("[RG3] Session dupliquée → KICKED : " + username);
+                } catch (IOException e) {
+                    System.err.println("[ERREUR] Impossible d'envoyer KICKED à " + username);
+                }
+                ch.closeEverything(ch.socket, ch.bufferedReader, ch.bufferedWriter);
+                break;
+            }
+        }
+    }
+
+    // ===================== GESTION MESSAGE =====================
 
     private void handlePrivateMessage(String message) {
-        // Format attendu : "sender|receiver|content"
-        String[] parts = message.split("\\|", 3);
 
+        // ✅ Gérer la notification de lecture : "READ|reader|contact"
+        if (message.startsWith("READ|")) {
+            String[] parts = message.split("\\|", 3);
+            if (parts.length == 3) {
+                handleReadReceipt(parts[1], parts[2]);
+            }
+            return;
+        }
+
+        String[] parts = message.split("\\|", 3);
         if (parts.length < 3) {
             System.err.println("[ERREUR] Message mal formaté : " + message);
             return;
@@ -91,64 +109,97 @@ public class ClientHandler implements Runnable {
         String receiver = parts[1];
         String content  = parts[2];
 
-        // RG7 : validation contenu
-        if (content == null || content.trim().isEmpty()) {
-            System.err.println("[ERREUR] Message vide ignoré.");
-            return;
-        }
-        if (content.length() > 1000) {
-            System.err.println("[ERREUR] Message trop long ignoré.");
+        if (content == null || content.trim().isEmpty()) return;
+        if (content.length() > 1000) return;
+
+        // ✅ Normaliser le receiver (insensible casse)
+        String realReceiver = findRealUsername(receiver);
+        if (realReceiver == null) {
+            System.out.println("[ERREUR] saveMessage — destinataire introuvable : " + receiver);
             return;
         }
 
-        // Sauvegarder en base
-        saveMessage(sender, receiver, content);
+        saveMessage(sender, realReceiver, content);
 
-        // Chercher si le destinataire est connecté et lui envoyer
         boolean destinataireConnecte = false;
         synchronized (clientHandlers) {
             for (ClientHandler ch : clientHandlers) {
-                if (ch.clientUsername.equals(receiver)) {
+                if (realReceiver.equalsIgnoreCase(ch.clientUsername)) {
                     try {
                         ch.bufferedWriter.write(sender + "|" + content);
                         ch.bufferedWriter.newLine();
                         ch.bufferedWriter.flush();
                         destinataireConnecte = true;
                     } catch (IOException e) {
-                        System.err.println("[ERREUR] Impossible d'envoyer à " + receiver);
+                        System.err.println("[ERREUR] Impossible d'envoyer à " + realReceiver);
                     }
                 }
             }
         }
 
-        // RG6 : message déjà sauvegardé, sera livré à la reconnexion
         if (!destinataireConnecte) {
-            System.out.println("[INFO] " + receiver + " est offline — message sauvegardé.");
+            System.out.println("[INFO] " + realReceiver + " est offline — message sauvegardé.");
         }
-
-        // RG12 : journalisation
-        System.out.println("[LOG] " + sender + " → " + receiver + " : " + content);
+        System.out.println("[LOG] " + sender + " → " + realReceiver + " : " + content);
     }
 
-    // ===================== MESSAGES EN ATTENTE (RG6) =====================
+    // ===================== NOTIFICATION DE LECTURE =====================
+
+    private void handleReadReceipt(String reader, String contact) {
+        EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
+        try {
+            em.getTransaction().begin();
+            List<Message> msgs = em.createQuery(
+                            "SELECT m FROM Message m " +
+                                    "WHERE m.sender.username = :contact " +
+                                    "AND m.receiver.username = :reader " +
+                                    "AND m.statut != :lu", Message.class)
+                    .setParameter("contact", contact)
+                    .setParameter("reader", reader)
+                    .setParameter("lu", StatusMessage.LU)
+                    .getResultList();
+            for (Message m : msgs) m.setStatut(StatusMessage.LU);
+            em.getTransaction().commit();
+            System.out.println("[LOG] " + reader + " a lu " + msgs.size() + " msg(s) de " + contact);
+        } catch (Exception e) {
+            if (em.getTransaction().isActive()) em.getTransaction().rollback();
+        } finally {
+            em.close();
+        }
+
+        // ✅ Envoyer READ_ACK à l'expéditeur s'il est connecté
+        synchronized (clientHandlers) {
+            for (ClientHandler ch : clientHandlers) {
+                if (ch.clientUsername.equalsIgnoreCase(contact)) {
+                    try {
+                        ch.bufferedWriter.write("READ_ACK|" + reader);
+                        ch.bufferedWriter.newLine();
+                        ch.bufferedWriter.flush();
+                        System.out.println("[LOG] READ_ACK envoyé à " + contact + " (lu par " + reader + ")");
+                    } catch (IOException e) {
+                        System.err.println("[ERREUR] Envoi READ_ACK : " + e.getMessage());
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // ===================== MESSAGES EN ATTENTE =====================
 
     private void deliverPendingMessages() {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
             List<Message> pending = em.createQuery(
                             "SELECT m FROM Message m " +
-                                    "WHERE m.receiver.username = :username " +
-                                    "AND m.statut = :statut " +
-                                    "ORDER BY m.dateEnvoi ASC",
-                            Message.class)
+                                    "WHERE m.receiver.username = :username AND m.statut = :statut " +
+                                    "ORDER BY m.dateEnvoi ASC", Message.class)
                     .setParameter("username", clientUsername)
                     .setParameter("statut", StatusMessage.ENVOYE)
                     .getResultList();
 
-            if (!pending.isEmpty()) {
-                System.out.println("[INFO] Livraison de " + pending.size()
-                        + " message(s) en attente à " + clientUsername);
-            }
+            // ✅ Garder la liste des expéditeurs à notifier (DELIVERED_ACK)
+            List<String> expediteursNotifies = new ArrayList<>();
 
             for (Message m : pending) {
                 try {
@@ -156,108 +207,122 @@ public class ClientHandler implements Runnable {
                     bufferedWriter.newLine();
                     bufferedWriter.flush();
 
-                    // Mettre à jour le statut en RECU
                     em.getTransaction().begin();
                     m.setStatut(StatusMessage.RECU);
                     em.getTransaction().commit();
 
+                    // ✅ Mémoriser l'expéditeur pour lui envoyer DELIVERED_ACK
+                    String expediteur = m.getSender().getUsername();
+                    if (!expediteursNotifies.contains(expediteur)) {
+                        expediteursNotifies.add(expediteur);
+                    }
+
                 } catch (IOException e) {
-                    System.err.println("[ERREUR] Livraison message en attente échouée.");
+                    System.err.println("[ERREUR] Livraison message échouée.");
                 }
             }
+
+            // ✅ Envoyer DELIVERED_ACK à chaque expéditeur connecté
+            // → le client expéditeur passera ses ticks de ✓ à ✓✓ gris
+            for (String expediteur : expediteursNotifies) {
+                synchronized (clientHandlers) {
+                    for (ClientHandler ch : clientHandlers) {
+                        if (ch.clientUsername.equalsIgnoreCase(expediteur)) {
+                            try {
+                                ch.bufferedWriter.write("DELIVERED_ACK|" + clientUsername);
+                                ch.bufferedWriter.newLine();
+                                ch.bufferedWriter.flush();
+                                System.out.println("[LOG] DELIVERED_ACK envoyé à " + expediteur
+                                        + " (messages livrés à " + clientUsername + ")");
+                            } catch (IOException e) {
+                                System.err.println("[ERREUR] Envoi DELIVERED_ACK : " + e.getMessage());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
         } finally {
             em.close();
         }
     }
 
-    // ===================== BROADCAST LISTE USERS =====================
+    // ===================== USER LIST =====================
 
     public static void broadcastUserList() {
-
-        // ✅ Copie snapshot pour éviter ConcurrentModificationException
         List<ClientHandler> snapshot = new ArrayList<>(clientHandlers);
 
-        // Construire le message avec uniquement les connectés
         StringBuilder sb = new StringBuilder("USERLIST|");
-        for (ClientHandler ch : snapshot) {
-            sb.append(ch.clientUsername).append(",");
-        }
+        for (ClientHandler ch : snapshot) sb.append(ch.clientUsername).append(",");
 
         String msg = sb.toString();
-        if (msg.endsWith(",")) {
-            msg = msg.substring(0, msg.length() - 1);
-        }
+        if (msg.endsWith(",")) msg = msg.substring(0, msg.length() - 1);
 
-        // ✅ Envoyer à tous, retirer silencieusement les sockets fermés
-        List<ClientHandler> aRetirer = new ArrayList<>();
-
+        List<ClientHandler> toRemove = new ArrayList<>();
         for (ClientHandler ch : snapshot) {
             try {
-                if (ch.socket != null && !ch.socket.isClosed() && ch.bufferedWriter != null) {
+                if (ch.socket != null && !ch.socket.isClosed()) {
                     ch.bufferedWriter.write(msg);
                     ch.bufferedWriter.newLine();
                     ch.bufferedWriter.flush();
                 } else {
-                    aRetirer.add(ch);
+                    toRemove.add(ch);
                 }
             } catch (IOException e) {
-                // Socket fermé → on le retire silencieusement sans log d'erreur
-                aRetirer.add(ch);
+                toRemove.add(ch);
             }
         }
-
-        // Nettoyer les clients dont le socket est fermé
-        clientHandlers.removeAll(aRetirer);
+        clientHandlers.removeAll(toRemove);
     }
 
-    // ===================== DÉCONNEXION =====================
+    // ===================== DECONNEXION =====================
 
     public void removeClientHandler() {
-        // ✅ Retire le client AVANT de broadcaster
-        clientHandlers.remove(this);
-
-        // RG4 : passer OFFLINE en base
+        if (clientHandlers.contains(this)) clientHandlers.remove(this);
         updateUserStatus(clientUsername, Status.OFFLINE);
-
-        // RG12 : log déconnexion
         System.out.println("[LOG] " + clientUsername + " déconnecté.");
-
-        // ✅ Notifie les clients restants (ce client est déjà retiré)
         broadcastUserList();
     }
 
     public void closeEverything(Socket socket, BufferedReader bufferedReader, BufferedWriter bufferedWriter) {
-        // ✅ Appelle removeClientHandler() une seule fois
-        if (clientHandlers.contains(this)) {
-            removeClientHandler();
-        }
+        removeClientHandler();
         try {
             if (bufferedReader != null) bufferedReader.close();
             if (bufferedWriter != null) bufferedWriter.close();
-            if (socket         != null) socket.close();
+            if (socket        != null) socket.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    // ===================== BASE DE DONNÉES =====================
+    // ===================== DB =====================
+
+    /**
+     * ✅ Trouve le vrai username en base (insensible à la casse)
+     */
+    private String findRealUsername(String username) {
+        EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
+        try {
+            List<User> users = em.createQuery(
+                            "SELECT u FROM User u WHERE LOWER(u.username) = LOWER(:username)", User.class)
+                    .setParameter("username", username)
+                    .getResultList();
+            return users.isEmpty() ? null : users.get(0).getUsername();
+        } finally {
+            em.close();
+        }
+    }
 
     private void updateUserStatus(String username, Status status) {
         EntityManager em = JPAUtil.getEntityManagerFactory().createEntityManager();
         try {
             em.getTransaction().begin();
-
             List<User> users = em.createQuery(
                             "SELECT u FROM User u WHERE u.username = :username", User.class)
                     .setParameter("username", username)
                     .getResultList();
-
-            if (!users.isEmpty()) {
-                users.get(0).setStatus(status);
-            } else {
-                System.out.println("[WARN] Utilisateur introuvable : " + username);
-            }
-
+            if (!users.isEmpty()) users.get(0).setStatus(status);
             em.getTransaction().commit();
         } finally {
             em.close();
@@ -278,29 +343,23 @@ public class ClientHandler implements Runnable {
                     .getResultList();
 
             if (senderList.isEmpty() || receiverList.isEmpty()) {
-                System.out.println("[ERREUR] saveMessage — sender ou receiver introuvable.");
+                System.out.println("[ERREUR] saveMessage — user introuvable.");
                 return;
             }
 
-            User sender   = senderList.get(0);
-            User receiver = receiverList.get(0);
-
-            // Déterminer le statut selon si le destinataire est connecté
             boolean receiverOnline = clientHandlers.stream()
-                    .anyMatch(ch -> ch.clientUsername.equals(receiverUsername));
-
+                    .anyMatch(ch -> receiverUsername.equalsIgnoreCase(ch.clientUsername));
             StatusMessage statut = receiverOnline ? StatusMessage.RECU : StatusMessage.ENVOYE;
 
-            // Créer et persister le message
-            Message message = new Message();
-            message.setSender(sender);
-            message.setReceiver(receiver);
-            message.setContenu(content);
-            message.setDateEnvoi(LocalDateTime.now());
-            message.setStatut(statut);
+            Message msg = new Message();
+            msg.setSender(senderList.get(0));
+            msg.setReceiver(receiverList.get(0));
+            msg.setContenu(content);
+            msg.setDateEnvoi(LocalDateTime.now());
+            msg.setStatut(statut);
 
             em.getTransaction().begin();
-            em.persist(message);
+            em.persist(msg);
             em.getTransaction().commit();
 
             System.out.println("[DB] Message sauvegardé : " + senderUsername
